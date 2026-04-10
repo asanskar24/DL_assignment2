@@ -51,8 +51,8 @@ class MultiTaskPerceptionModel(nn.Module):
 
         import gdown
         gdown.download(id="1L_wxb2k1i-EaKyfDbJMYzxDVf2X9-j3e", output=classifier_path, quiet=False)
-        gdown.download(id="<localizer.pth drive id>", output=localizer_path, quiet=False)
-        gdown.download(id="<unet.pth drive id>", output=unet_path, quiet=False)
+        gdown.download(id="1H9r67PsumwlAaRTV-D1wFQ650vnEYPPN", output=localizer_path, quiet=False)
+        gdown.download(id="1IoaUdLttfXDuzd5tGx3WdxblUo9yYrTy", output=unet_path, quiet=False)
 
         self.image_size = image_size
 
