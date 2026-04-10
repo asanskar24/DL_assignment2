@@ -4,7 +4,7 @@
 import torch
 import torch.nn as nn
 
-from .vgg11 import VGG11
+from .vgg11 import VGG11Encoder
 from .layers import CustomDropout
 
 
@@ -32,7 +32,7 @@ class VGG11Classifier(nn.Module):
         super().__init__()
 
         # Shared convolutional backbone
-        self.encoder = VGG11(in_channels=in_channels)
+        self.encoder = VGG11Encoder(in_channels=in_channels)
 
         # Pool bottleneck to fixed 7x7 regardless of input size
         self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))

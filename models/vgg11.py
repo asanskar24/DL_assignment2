@@ -6,7 +6,7 @@ import torch.nn as nn
 from .layers import CustomDropout
 
 
-class VGG11(nn.Module):
+class VGG11Encoder(nn.Module):
     """VGG11-style encoder with optional intermediate feature returns.
     
     Architecture:

@@ -4,7 +4,7 @@
 import torch
 import torch.nn as nn
 
-from .vgg11 import VGG11
+from .vgg11 import VGG11Encoder
 from .layers import CustomDropout
 
 
@@ -37,7 +37,7 @@ class VGG11Localizer(nn.Module):
         self.image_size = image_size
 
         # Shared convolutional backbone (pretrained weights can be loaded here)
-        self.encoder = VGG11(in_channels=in_channels)
+        self.encoder = VGG11Encoder(in_channels=in_channels)
 
         # Pool bottleneck to fixed spatial size
         self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
