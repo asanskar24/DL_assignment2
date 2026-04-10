@@ -7,7 +7,7 @@ from .layers import CustomDropout
 from .localization import VGG11Localizer
 from .classification import VGG11Classifier
 from .segmentation import VGG11UNet
-from .vgg11 import VGG11Encoder
+from .vgg11 import VGG11
 from .multitask import MultiTaskPerceptionModel
 
 __all__ = [
