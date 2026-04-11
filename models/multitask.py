@@ -50,8 +50,8 @@ class MultiTaskPerceptionModel(nn.Module):
         super().__init__()
 
         import gdown
-        gdown.download(id="<1jxL0-hvjiondA2OXDguubfh3_Lr2xXqZ>", output=classifier_path, quiet=False)
-        gdown.download(id="<1Q1AJzjX8b030qOslm8icQxJ3O17Y-wd8>", output=localizer_path, quiet=False)
+        gdown.download(id="1jxL0-hvjiondA2OXDguubfh3_Lr2xXqZ", output=classifier_path, quiet=False)
+        gdown.download(id="1Q1AJzjX8b030qOslm8icQxJ3O17Y-wd8", output=localizer_path, quiet=False)
         gdown.download(id="1SqOCrf3vLrpULxU7x2VbZKBFrdumGnJx", output=unet_path, quiet=False)
 
         self.image_size = image_size
