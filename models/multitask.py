@@ -1,199 +1,111 @@
-"""Unified multi-task perception model (root-level, imported by autograder).
-
-    from multitask import MultiTaskPerceptionModel
-"""
 import torch
 import torch.nn as nn
-
-from models.vgg11 import VGG11Encoder
-from models.layers import CustomDropout
-from models.segmentation import DecoderBlock
-
+import gdown
 
 class MultiTaskPerceptionModel(nn.Module):
-    """Shared-backbone multi-task model.
+    """Shared-backbone multi-task model."""
 
-    Architecture:
-        - Single shared VGG11 encoder backbone
-        - Three task-specific heads:
-            1. classification_head  → 37-class breed logits
-            2. localization_head    → [cx, cy, w, h] in pixel space
-            3. Segmentation decoder → (B, 3, H, W) logits
+    def __init__(self, num_breeds: int = 37, seg_classes: int = 3, in_channels: int = 3,
+                 classifier_path: str = "classifier.pth",
+                 localizer_path: str = "localizer.pth",
+                 unet_path: str = "unet.pth"):
 
-    Weights are downloaded from Google Drive on first instantiation,
-    then loaded from the three saved task checkpoints.
-    """
+        super(MultiTaskPerceptionModel, self).__init__()
 
-    # VGG11 paper fixes input at 224×224
-    IMAGE_SIZE: int = 224
+        # ── Download pretrained weights (REQUIRED) ─────────────────────
+        gdown.download(id="<classifier.pth drive id>", output=classifier_path, quiet=False)
+        gdown.download(id="<localizer.pth drive id>", output=localizer_path, quiet=False)
+        gdown.download(id="<unet.pth drive id>", output=unet_path, quiet=False)
 
-    def __init__(
-        self,
-        num_breeds: int = 37,
-        seg_classes: int = 3,
-        in_channels: int = 3,
-        classifier_path: str = "classifier.pth",
-        localizer_path: str = "localizer.pth",
-        unet_path: str = "unet.pth",
-        dropout_p: float = 0.5,
-    ):
-        super().__init__()
+        self.loc_scale = 224.0
 
-        # ── Download checkpoints from Drive ──────────────────────────────
-        import gdown
-        gdown.download(id="1tOcN91BzG_SFuu7lpeIF0L16KzqgV1v7", output=classifier_path, quiet=False)
-        gdown.download(id="102B3zyTBzuV_4VLSJCDWu0aYihYTplMW", output=localizer_path,  quiet=False)
-        gdown.download(id="11HX-LudF6cFLUEwSSwZ4jBPggOsHjuBh", output=unet_path,       quiet=False)
-
-        # ── Shared backbone ───────────────────────────────────────────────
+        # ✅ Shared encoder
         self.encoder = VGG11Encoder(in_channels=in_channels)
 
-        # ── Classification head ───────────────────────────────────────────
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
-        self.classifier = nn.Sequential(
+        # ── Classification head ────────────────────────────────────────
+        self.classifier_head = nn.Sequential(
             nn.Flatten(),
             nn.Linear(512 * 7 * 7, 4096),
-            nn.BatchNorm1d(4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
+            nn.ReLU(True),
+            CustomDropout(p=0.6),
             nn.Linear(4096, 4096),
-            nn.BatchNorm1d(4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
+            nn.ReLU(True),
+            CustomDropout(p=0.6),
             nn.Linear(4096, num_breeds),
         )
 
-        # ── Localization head ─────────────────────────────────────────────
-        self.regressor = nn.Sequential(
+        # ── Localization head ─────────────────────────────────────────
+        self.localizer_head = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(512 * 7 * 7, 4096),
-            nn.BatchNorm1d(4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
-            nn.Linear(4096, 1024),
-            nn.BatchNorm1d(1024),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
-            nn.Linear(1024, 4),
+            nn.Linear(512 * 7 * 7, 1024),
+            nn.ReLU(True),
+            CustomDropout(p=0.3),
+            nn.Linear(1024, 512),
+            nn.ReLU(True),
+            CustomDropout(p=0.3),
+            nn.Linear(512, 4),
             nn.Sigmoid(),
         )
 
-        # ── Segmentation decoder ──────────────────────────────────────────
-        self.decoder4 = DecoderBlock(512, 512, 256, dropout_p=dropout_p * 0.5)
-        self.decoder3 = DecoderBlock(256, 256, 128, dropout_p=dropout_p * 0.5)
-        self.decoder2 = DecoderBlock(128, 128, 64,  dropout_p=0.0)
-        self.decoder1 = DecoderBlock(64,  64,  32,  dropout_p=0.0)
-        self.final_upsample = nn.ConvTranspose2d(32, 32, kernel_size=2, stride=2)
-        self.output_conv    = nn.Conv2d(32, seg_classes, kernel_size=1)
+        # ── Segmentation decoder ──────────────────────────────────────
+        self.bottleneck_drop = CustomDropout(p=0.6)
 
-        # ── Load pretrained weights ───────────────────────────────────────
+        self.up1 = UpBlock(512, 512, 512)
+        self.up2 = UpBlock(512, 512, 256)
+        self.up3 = UpBlock(256, 256, 128)
+        self.up4 = UpBlock(128, 128, 64)
+        self.up5 = UpBlock(64, 64, 64)
+
+        self.final = nn.Conv2d(64, seg_classes, kernel_size=1)
+
+        # ✅ Load pretrained weights
         self._load_pretrained_weights(classifier_path, localizer_path, unet_path)
 
-    # ─────────────────────────────────────────────────────────────────────
-    def _load_pretrained_weights(
-        self,
-        classifier_path: str,
-        localizer_path: str,
-        unet_path: str,
-    ) -> None:
-        """Load weights from individually trained task checkpoints.
+    # ────────────────────────────────────────────────────────────────
+    def _load_pretrained_weights(self, classifier_path, localizer_path, unet_path):
 
-        Key mapping:
-          classifier.pth  → encoder.*  +  classifier.*
-          localizer.pth   → regressor.*
-          unet.pth        → encoder.*  (overrides classifier encoder)
-                          + decoder{1-4}.*, final_upsample.*, output_conv.*
-        """
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Load weights
+        classifier_state = torch.load(classifier_path, map_location="cpu")
+        localizer_state = torch.load(localizer_path, map_location="cpu")
+        unet_state = torch.load(unet_path, map_location="cpu")
 
-        def _load(path):
-            obj = torch.load(path, map_location=device)
-            # Support both torch.save(model, ...) and torch.save(model.state_dict(), ...)
-            return obj.state_dict() if not isinstance(obj, dict) else obj
+        # ✅ Load encoder (strict match required)
+        encoder_state = classifier_state["encoder"]
+        self.encoder.load_state_dict(encoder_state, strict=True)
 
-        # ── 1. Classifier: encoder + classification head ──────────────────
-        clf = _load(classifier_path)
+        # Load heads
+        self.classifier_head.load_state_dict(classifier_state["classifier_head"], strict=False)
+        self.localizer_head.load_state_dict(localizer_state["localizer_head"], strict=False)
 
-        encoder_state = {k.replace("encoder.", ""): v
-                         for k, v in clf.items() if k.startswith("encoder.")}
-        miss, unexp = self.encoder.load_state_dict(encoder_state, strict=True)
-        print(f"[Encoder from classifier] missing={miss}  unexpected={unexp}")
+        # Load segmentation decoder
+        self.load_state_dict(unet_state, strict=False)
 
-        clf_head_state = {k.replace("classifier.", ""): v
-                          for k, v in clf.items() if k.startswith("classifier.")}
-        miss, unexp = self.classifier.load_state_dict(clf_head_state, strict=True)
-        print(f"[Classification head]    missing={miss}  unexpected={unexp}")
+    # ────────────────────────────────────────────────────────────────
+    def forward(self, x: torch.Tensor):
 
-        # ── 2. Localizer: regression head only ───────────────────────────
-        loc = _load(localizer_path)
+        # Encoder
+        features, skips = self.encoder(x)
 
-        reg_state = {k.replace("regressor.", ""): v
-                     for k, v in loc.items() if k.startswith("regressor.")}
-        miss, unexp = self.regressor.load_state_dict(reg_state, strict=True)
-        print(f"[Localization head]      missing={miss}  unexpected={unexp}")
+        # ── Classification ───────────────────────────────────────────
+        cls_out = self.classifier_head(features)
 
-        # ── 3. UNet: override encoder + load decoder ──────────────────────
-        unet = _load(unet_path)
+        # ── Localization ─────────────────────────────────────────────
+        loc_out = self.localizer_head(features) * self.loc_scale
 
-        # Override encoder with UNet's encoder (decoder was trained with it)
-        unet_encoder = {k.replace("encoder.", ""): v
-                        for k, v in unet.items() if k.startswith("encoder.")}
-        if unet_encoder:
-            miss, unexp = self.encoder.load_state_dict(unet_encoder, strict=True)
-            print(f"[Encoder from UNet]      missing={miss}  unexpected={unexp}")
+        # ── Segmentation ────────────────────────────────────────────
+        x = self.bottleneck_drop(features)
 
-        # Load each decoder module individually for clear error reporting
-        dec_modules = {
-            "decoder4":      self.decoder4,
-            "decoder3":      self.decoder3,
-            "decoder2":      self.decoder2,
-            "decoder1":      self.decoder1,
-            "final_upsample": self.final_upsample,
-            "output_conv":   self.output_conv,
-        }
-        for prefix, module in dec_modules.items():
-            sub = {k[len(prefix) + 1:]: v
-                   for k, v in unet.items() if k.startswith(prefix + ".")}
-            if sub:
-                miss, unexp = module.load_state_dict(sub, strict=True)
-                print(f"[{prefix}]  missing={miss}  unexpected={unexp}")
-            else:
-                print(f"[{prefix}]  WARNING — no weights found in unet.pth!")
+        x = self.up1(x, skips[4])
+        x = self.up2(x, skips[3])
+        x = self.up3(x, skips[2])
+        x = self.up4(x, skips[1])
+        x = self.up5(x, skips[0])
 
-        print("Pretrained weights loaded successfully.")
+        seg_out = self.final(x)
 
-    # ─────────────────────────────────────────────────────────────────────
-    def forward(self, x: torch.Tensor) -> dict:
-        """Single forward pass → all three task outputs.
-
-        Args:
-            x: [B, 3, 224, 224] normalised input images.
-
-        Returns:
-            dict with keys:
-              'classification' : [B, 37]       logits
-              'localization'   : [B, 4]         [cx,cy,w,h] in pixels
-              'segmentation'   : [B, 3, 224, 224] logits
-        """
-        # Shared encoder with skip connections for segmentation
-        bottleneck, features = self.encoder(x, return_features=True)
-
-        # Classification branch
-        pooled   = self.adaptive_pool(bottleneck)   # (B, 512, 7, 7)
-        cls_out  = self.classifier(pooled)           # (B, 37)
-
-        # Localization branch — sigmoid output scaled to pixel space
-        bbox_out = self.regressor(pooled) * self.IMAGE_SIZE  # (B, 4)
-
-        # Segmentation branch — U-Net decoder
-        d4  = self.decoder4(bottleneck,  features["block4"])  # (B,256,14,14)
-        d3  = self.decoder3(d4,          features["block3"])  # (B,128,28,28)
-        d2  = self.decoder2(d3,          features["block2"])  # (B, 64,56,56)
-        d1  = self.decoder1(d2,          features["block1"])  # (B, 32,112,112)
-        seg_out = self.output_conv(self.final_upsample(d1))   # (B,3,224,224)
-
+        # ✅ IMPORTANT: return dict (as per skeleton)
         return {
             "classification": cls_out,
-            "localization":   bbox_out,
-            "segmentation":   seg_out,
+            "localization": loc_out,
+            "segmentation": seg_out
         }
