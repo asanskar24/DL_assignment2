@@ -41,9 +41,9 @@ class MultiTaskPerceptionModel(nn.Module):
 
         # ── Download checkpoints from Drive ──────────────────────────────
         import gdown
-        gdown.download(id="1eRaeNVw7F-0yu8VRtQLdmg2jPy81234J", output=classifier_path, quiet=False)
-        gdown.download(id="1H9r67PsumwlAaRTV-D1wFQ650vnEYPPN", output=localizer_path,  quiet=False)
-        gdown.download(id="1IoaUdLttfXDuzd5tGx3WdxblUo9yYrTy", output=unet_path,       quiet=False)
+        gdown.download(id="1tOcN91BzG_SFuu7lpeIF0L16KzqgV1v7", output=classifier_path, quiet=False)
+        gdown.download(id="102B3zyTBzuV_4VLSJCDWu0aYihYTplMW", output=localizer_path,  quiet=False)
+        gdown.download(id="11HX-LudF6cFLUEwSSwZ4jBPggOsHjuBh", output=unet_path,       quiet=False)
 
         # ── Shared backbone ───────────────────────────────────────────────
         self.encoder = VGG11Encoder(in_channels=in_channels)
