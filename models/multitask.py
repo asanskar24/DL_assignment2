@@ -13,9 +13,9 @@ class MultiTaskPerceptionModel(nn.Module):
         super(MultiTaskPerceptionModel, self).__init__()
 
         # ── Download pretrained weights (REQUIRED) ─────────────────────
-        gdown.download(id="<classifier.pth drive id>", output=classifier_path, quiet=False)
-        gdown.download(id="<localizer.pth drive id>", output=localizer_path, quiet=False)
-        gdown.download(id="<unet.pth drive id>", output=unet_path, quiet=False)
+        gdown.download(id="1tOcN91BzG_SFuu7lpeIF0L16KzqgV1v7", output=classifier_path, quiet=False)
+        gdown.download(id="102B3zyTBzuV_4VLSJCDWu0aYihYTplMW", output=localizer_path, quiet=False)
+        gdown.download(id="11HX-LudF6cFLUEwSSwZ4jBPggOsHjuBh", output=unet_path, quiet=False)
 
         self.loc_scale = 224.0
 
