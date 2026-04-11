@@ -4,6 +4,32 @@ import gdown
 from .vgg11 import VGG11Encoder
 from .layers import CustomDropout
 
+class UpBlock(nn.Module):
+    def __init__(self, in_channels, skip_channels, out_channels):
+        super(UpBlock, self).__init__()
+
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(out_channels + skip_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x, skip):
+        x = self.up(x)
+
+        # Handle possible size mismatch (VERY IMPORTANT)
+        if x.shape[-2:] != skip.shape[-2:]:
+            x = torch.nn.functional.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+
+        x = torch.cat([x, skip], dim=1)
+        x = self.conv(x)
+        return x
 class MultiTaskPerceptionModel(nn.Module):
     """Shared-backbone multi-task model."""
 
