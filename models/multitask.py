@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import gdown
 from .vgg11 import VGG11Encoder
+from .layers import CustomDropout
 
 class MultiTaskPerceptionModel(nn.Module):
     """Shared-backbone multi-task model."""
