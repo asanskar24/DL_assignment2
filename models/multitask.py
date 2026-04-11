@@ -12,16 +12,19 @@ from .segmentation import VGG11UNet, DecoderBlock
 
 class MultiTaskPerceptionModel(nn.Module):
     """Shared-backbone multi-task model.
-    
+
     Architecture:
         - Single shared VGG11 encoder backbone
         - Three task-specific heads branching from the shared backbone:
-            1. Classification head: 37-class breed prediction
-            2. Localization head: bounding box regression [x_center, y_center, w, h]
-            3. Segmentation head: U-Net decoder for pixel-wise mask prediction
-    
-    Weights are loaded from individually trained task models, then the encoder
-    is shared and fine-tuned jointly during multi-task training.
+            1. classifier       : 37-class breed prediction
+            2. regressor        : bounding box regression [cx, cy, w, h]
+            3. Segmentation decoder: U-Net decoder for pixel-wise mask prediction
+
+    Attribute names match checkpoint key prefixes exactly:
+        classifier.pth  →  encoder.*  +  classifier.*
+        localizer.pth   →  regressor.*
+        unet.pth        →  decoder4.* decoder3.* decoder2.* decoder1.*
+                           final_upsample.*  output_conv.*
     """
 
     def __init__(
@@ -35,24 +38,12 @@ class MultiTaskPerceptionModel(nn.Module):
         unet_path: str = "unet.pth",
         dropout_p: float = 0.5,
     ):
-        """
-        Initialize the shared backbone/heads using these trained weights.
-        Args:
-            num_breeds: Number of output classes for classification head.
-            seg_classes: Number of output classes for segmentation head.
-            in_channels: Number of input channels.
-            image_size: Input image size (assumed square).
-            classifier_path: Path to trained classifier weights.
-            localizer_path: Path to trained localizer weights.
-            unet_path: Path to trained unet weights.
-            dropout_p: Dropout probability for task heads.
-        """
         super().__init__()
 
         import gdown
         gdown.download(id="1jxL0-hvjiondA2OXDguubfh3_Lr2xXqZ", output=classifier_path, quiet=False)
-        gdown.download(id="1Q1AJzjX8b030qOslm8icQxJ3O17Y-wd8", output=localizer_path, quiet=False)
-        gdown.download(id="1SqOCrf3vLrpULxU7x2VbZKBFrdumGnJx", output=unet_path, quiet=False)
+        gdown.download(id="1Q1AJzjX8b030qOslm8icQxJ3O17Y-wd8", output=localizer_path,  quiet=False)
+        gdown.download(id="1SqOCrf3vLrpULxU7x2VbZKBFrdumGnJx", output=unet_path,       quiet=False)
 
         self.image_size = image_size
 
@@ -60,8 +51,9 @@ class MultiTaskPerceptionModel(nn.Module):
         self.encoder = VGG11Encoder(in_channels=in_channels)
 
         # ── Classification head ──────────────────────────────────────────────
+        # NOTE: attribute is named 'classifier' to match keys in classifier.pth
         self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
-        self.classification_head = nn.Sequential(
+        self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(512 * 7 * 7, 4096),
             nn.BatchNorm1d(4096),
@@ -75,7 +67,8 @@ class MultiTaskPerceptionModel(nn.Module):
         )
 
         # ── Localization head ────────────────────────────────────────────────
-        self.localization_head = nn.Sequential(
+        # NOTE: attribute is named 'regressor' to match keys in localizer.pth
+        self.regressor = nn.Sequential(
             nn.Flatten(),
             nn.Linear(512 * 7 * 7, 4096),
             nn.BatchNorm1d(4096),
@@ -90,14 +83,14 @@ class MultiTaskPerceptionModel(nn.Module):
         )
 
         # ── Segmentation head (U-Net decoder) ────────────────────────────────
-        self.decoder4 = DecoderBlock(512, 512, 256, dropout_p=dropout_p * 0.5)
-        self.decoder3 = DecoderBlock(256, 256, 128, dropout_p=dropout_p * 0.5)
-        self.decoder2 = DecoderBlock(128, 128, 64,  dropout_p=0.0)
-        self.decoder1 = DecoderBlock(64,  64,  32,  dropout_p=0.0)
+        self.decoder4       = DecoderBlock(512, 512, 256, dropout_p=dropout_p * 0.5)
+        self.decoder3       = DecoderBlock(256, 256, 128, dropout_p=dropout_p * 0.5)
+        self.decoder2       = DecoderBlock(128, 128, 64,  dropout_p=0.0)
+        self.decoder1       = DecoderBlock(64,  64,  32,  dropout_p=0.0)
         self.final_upsample = nn.ConvTranspose2d(32, 32, kernel_size=2, stride=2)
-        self.output_conv = nn.Conv2d(32, seg_classes, kernel_size=1)
+        self.output_conv    = nn.Conv2d(32, seg_classes, kernel_size=1)
 
-        # ── Load pretrained weights from individual task models ──────────────
+        # ── Load pretrained weights ──────────────────────────────────────────
         self._load_pretrained_weights(classifier_path, localizer_path, unet_path)
 
     def _load_pretrained_weights(
@@ -106,42 +99,53 @@ class MultiTaskPerceptionModel(nn.Module):
         localizer_path: str,
         unet_path: str,
     ):
-        """Load weights from individually trained task models.
-        
-        Encoder weights are taken from the classifier (best trained backbone).
-        Each task head loads its own pretrained weights.
-        """
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # Load classifier — take encoder + classification head weights
-        clf_state = torch.load(classifier_path, map_location=device)
-        encoder_state = {
-            k.replace('encoder.', ''): v
-            for k, v in clf_state.items() if k.startswith('encoder.')
-        }
-        self.encoder.load_state_dict(encoder_state)
+        def _load(path):
+            obj = torch.load(path, map_location=device)
+            return obj.state_dict() if not isinstance(obj, dict) else obj
 
-        clf_head_state = {
-            k.replace('classifier.', ''): v
-            for k, v in clf_state.items() if k.startswith('classifier.')
-        }
-        self.classification_head.load_state_dict(clf_head_state)
+        # ── 1. Classifier: encoder + classifier head ─────────────────────────
+        clf = _load(classifier_path)
 
-        # Load localization head weights
-        loc_state = torch.load(localizer_path, map_location=device)
-        loc_head_state = {
-            k.replace('regressor.', ''): v
-            for k, v in loc_state.items() if k.startswith('regressor.')
-        }
-        self.localization_head.load_state_dict(loc_head_state)
+        enc_state = {k.replace('encoder.', ''): v
+                     for k, v in clf.items() if k.startswith('encoder.')}
+        m, u = self.encoder.load_state_dict(enc_state, strict=True)
+        print(f"[Encoder from classifier] missing={m}  unexpected={u}")
 
-        # Load segmentation decoder weights
-        unet_state = torch.load(unet_path, map_location=device)
-        seg_keys = ['decoder4', 'decoder3', 'decoder2', 'decoder1',
-                    'final_upsample', 'output_conv']
-        seg_state = {k: v for k, v in unet_state.items()
-                     if any(k.startswith(sk) for sk in seg_keys)}
-        self.load_state_dict(seg_state, strict=False)
+        clf_head = {k.replace('classifier.', ''): v
+                    for k, v in clf.items() if k.startswith('classifier.')}
+        m, u = self.classifier.load_state_dict(clf_head, strict=True)
+        print(f"[classifier head]         missing={m}  unexpected={u}")
+
+        # ── 2. Localizer: regressor head only ────────────────────────────────
+        loc = _load(localizer_path)
+
+        reg_state = {k.replace('regressor.', ''): v
+                     for k, v in loc.items() if k.startswith('regressor.')}
+        m, u = self.regressor.load_state_dict(reg_state, strict=True)
+        print(f"[regressor head]          missing={m}  unexpected={u}")
+
+        # ── 3. UNet: decoder ONLY — do NOT override encoder ──────────────────
+        # The classifier head and regressor were trained against the classifier
+        # encoder. Overriding encoder with the UNet encoder causes F1 -> 0.
+        unet = _load(unet_path)
+
+        for prefix, module in [
+            ('decoder4',       self.decoder4),
+            ('decoder3',       self.decoder3),
+            ('decoder2',       self.decoder2),
+            ('decoder1',       self.decoder1),
+            ('final_upsample', self.final_upsample),
+            ('output_conv',    self.output_conv),
+        ]:
+            sub = {k[len(prefix)+1:]: v
+                   for k, v in unet.items() if k.startswith(prefix + '.')}
+            if sub:
+                m, u = module.load_state_dict(sub, strict=True)
+                print(f"[{prefix}]  missing={m}  unexpected={u}")
+            else:
+                print(f"[{prefix}]  WARNING — no weights found in unet.pth!")
 
         print("Pretrained weights loaded successfully.")
 
@@ -155,24 +159,19 @@ class MultiTaskPerceptionModel(nn.Module):
             - 'localization':   [B, 4] bounding box tensor (pixel coords).
             - 'segmentation':   [B, seg_classes, H, W] segmentation logits tensor.
         """
-        # ── Single shared forward pass through encoder ────────────────────
         bottleneck, features = self.encoder(x, return_features=True)
 
-        # ── Classification branch ─────────────────────────────────────────
-        pooled = self.adaptive_pool(bottleneck)          # (B, 512, 7, 7)
-        cls_logits = self.classification_head(pooled)    # (B, num_breeds)
+        # Classification + Localization share pooled bottleneck features
+        pooled     = self.adaptive_pool(bottleneck)
+        cls_logits = self.classifier(pooled)
+        bbox       = self.regressor(pooled) * self.image_size
 
-        # ── Localization branch ───────────────────────────────────────────
-        bbox = self.localization_head(pooled)            # (B, 4) in [0,1]
-        bbox = bbox * self.image_size                    # scale to pixel space
-
-        # ── Segmentation branch ───────────────────────────────────────────
-        d4  = self.decoder4(bottleneck,    features['block4'])  # (B, 256, 14, 14)
-        d3  = self.decoder3(d4,            features['block3'])  # (B, 128, 28, 28)
-        d2  = self.decoder2(d3,            features['block2'])  # (B, 64,  56, 56)
-        d1  = self.decoder1(d2,            features['block1'])  # (B, 32,  112,112)
-        out = self.final_upsample(d1)                           # (B, 32,  224,224)
-        seg_logits = self.output_conv(out)                      # (B, seg_classes, 224,224)
+        # Segmentation uses full spatial hierarchy via skip connections
+        d4  = self.decoder4(bottleneck,  features['block4'])
+        d3  = self.decoder3(d4,          features['block3'])
+        d2  = self.decoder2(d3,          features['block2'])
+        d1  = self.decoder1(d2,          features['block1'])
+        seg_logits = self.output_conv(self.final_upsample(d1))
 
         return {
             'classification': cls_logits,
