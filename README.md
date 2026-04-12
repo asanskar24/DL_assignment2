@@ -125,8 +125,8 @@ Your final project should look like this:
 
 Make sure your README includes:
 
-- Public **WandB report** link
-- **GitHub repo** link
+- https://wandb.ai/da25s019-iitm-india/da6401-assignment2/reports/Assignment-2--VmlldzoxNjQ5OTcyMg?accessToken=euziqhflvfwrxfrzk323qpudsiri5ubk7uohe04xsoasjxjzn0p59jaor6r2dkrz)
+- https://github.com/asanskar24/DL_assignment2
 
 ---
 
